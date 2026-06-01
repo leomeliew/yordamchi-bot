@@ -35,7 +35,6 @@ whitelist = {}
 # Bot qo'shgan admin: {chat_id: admin_user_id}
 group_admins = {}
 
-# Conversation state: foydalanuvchi qaysi guruh uchun link kutilmoqda
 # {admin_user_id: chat_id}
 waiting_for_whitelist_add = {}
 waiting_for_whitelist_remove = {}
@@ -117,21 +116,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if chat.type in ("group", "supergroup"):
         member = await context.bot.get_chat_member(chat.id, user.id)
-        if is_admin_status(member.status):
-            group_admins[chat.id] = user.id
-            try:
-                await context.bot.send_message(
-                    user.id,
-                    f"⚙️ <b>{chat.title}</b> — Boshqaruv paneli\n\n"
-                    f"Quyidagi tugmalar orqali guruhni boshqaring:",
-                    parse_mode="HTML",
-                    reply_markup=get_panel_keyboard(chat.id)
-                )
-                await update.message.reply_text("✅ Panel shaxsiy xabarga yuborildi!")
-            except Exception:
-                await update.message.reply_text(
-                    "⚠️ Avval menga shaxsiy xabar yozing, keyin /start ni qayta bosing."
-                )
+        if not is_admin_status(member.status):
+            return
+        group_admins[chat.id] = user.id
+        try:
+            await context.bot.send_message(
+                user.id,
+                f"⚙️ <b>{chat.title}</b> — Boshqaruv paneli\n\n"
+                f"Quyidagi tugmalar orqali guruhni boshqaring:",
+                parse_mode="HTML",
+                reply_markup=get_panel_keyboard(chat.id)
+            )
+            await update.message.reply_text("✅ Boshqaruv paneli shaxsiy xabaringizga yuborildi!")
+        except Exception:
+            await update.message.reply_text(
+                f"⚙️ <b>{chat.title}</b> — Boshqaruv paneli",
+                parse_mode="HTML",
+                reply_markup=get_panel_keyboard(chat.id)
+            )
         return
 
     user_groups = [cid for cid, uid in group_admins.items() if uid == user.id]
@@ -205,7 +207,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• <code>@iforafashion</code>\n"
             "• <code>instagram.com/iforafashion</code>\n"
             "• <code>t.me/iforafashion</code>\n\n"
-            "👇 Quyiga yozing, men avtomatik qo'shaman.\n"
+            "👇 Shu yerga yozing — men avtomatik qo'shaman.\n"
             "Bekor qilish: /cancel",
             parse_mode="HTML"
         )
@@ -390,7 +392,7 @@ async def check_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"⚠️ <b>Ogohlantirish</b> | {chat.title}\n\n"
             f"👤 {mention} (ID: <code>{user_id}</code>)\n"
             f"📎 Yuborgan: <code>{violation_detail}</code>\n"
-            f"📊 Ogohlantirish: {warn_count}/3\n"
+            f"📊 Ogohlantirish: {warn_count}/3 (yana {remaining} ta qoldi)\n"
             f"📝 To'liq matn: <code>{text[:150]}</code>"
         )
 
