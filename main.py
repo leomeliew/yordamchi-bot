@@ -67,6 +67,40 @@ load_data()
 LINK_PATTERN = re.compile(r'(https?://\S+|www\.\S+|t\.me/\S+)', re.IGNORECASE)
 USERNAME_PATTERN = re.compile(r'@(\w{5,})')
 
+# ─── Mijoz / reklama aniqlash ──────────────────────────────
+# Mijoz narx yoki mahsulot haqida so'raganda ishlatadigan so'zlar
+INQUIRY_KEYWORDS = [
+    "qanchadan", "qancha", "narxi", "narx", "necha", "so'm", "sum",
+    "dollar", "pul", "qiymati", "sotasiz", "bormi", "bor",
+    "yo'qmi", "mavjud", "price", "cost", "how much",
+    "baha", "bahosi", "chegirma", "skidka", "rang", "razmer",
+    "o'lcham", "katta", "kichik", "buyurtma", "olsam",
+]
+
+# Reklama/promo belgisi bo'lgan so'zlar
+PROMO_KEYWORDS = [
+    "kanalimga", "guruhimga", "kanalga", "guruhga",
+    "obuna bo'ling", "a'zo bo'ling", "kuzatib boring",
+    "follow me", "subscribe", "join", "reklama",
+    "reklamamni", "reklam", "promo",
+]
+
+# Ifora Shop o'z brendining domenlar / nomlar (har doim ruxsat)
+BRAND_NAMES = ["iforafashion", "ifora_fashion", "iforeshop", "ifora shop", "ifora.uz"]
+
+def is_customer_inquiry(text: str) -> bool:
+    t = text.lower()
+    return any(kw in t for kw in INQUIRY_KEYWORDS)
+
+def is_promo_message(text: str) -> bool:
+    t = text.lower()
+    return any(kw in t for kw in PROMO_KEYWORDS)
+
+def is_brand_content(text: str) -> bool:
+    """Ifora Shop o'z brendining linki yoki nomi keltirilgan."""
+    t = text.lower()
+    return any(brand in t for brand in BRAND_NAMES)
+
 # ─── Yordamchi ────────────────────────────────────────────
 def is_admin_status(status):
     return status in ("administrator", "creator")
@@ -345,11 +379,27 @@ async def check_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not links and not usernames:
         return
 
+    # 1. Har doim ruxsat — Ifora Shop o'z linki yoki nomi
+    if is_brand_content(text):
+        return
+
+    # 2. Har doim ruxsat — whitelist qo'shilgan domenlar
     if is_whitelisted(text, chat.id):
         return
 
+    # 3. Mijoz narx/mahsulot so'rayapti va reklama emas → ruxsat
+    if is_customer_inquiry(text) and not is_promo_message(text):
+        return
+
+    # 4. Bu nuqtaga yetib kelgan = reklama yoki begona link → o'chirish
     detail = links[0][:60] if links else f"@{usernames[0]}"
     mention = f"<a href='tg://user?id={user.id}'>{user.first_name}</a>"
+
+    # Tur belgisi
+    if is_promo_message(text):
+        violation_type = "📢 Reklama"
+    else:
+        violation_type = "🔗 Begona link"
 
     try:
         await message.delete()
@@ -374,6 +424,7 @@ async def check_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await notify_admin(
             context, chat.id,
             f"🚫 <b>Ban</b> | {chat.title}\n"
+            f"🏷 {violation_type}\n"
             f"👤 {mention} (ID: <code>{user.id}</code>)\n"
             f"📎 <code>{detail}</code>\n"
             f"💬 <code>{text[:150]}</code>"
@@ -382,6 +433,7 @@ async def check_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await notify_admin(
             context, chat.id,
             f"⚠️ <b>Ogohlantirish {count}/3</b> | {chat.title}\n"
+            f"🏷 {violation_type}\n"
             f"👤 {mention} (ID: <code>{user.id}</code>)\n"
             f"📎 <code>{detail}</code>\n"
             f"💬 <code>{text[:150]}</code>"
