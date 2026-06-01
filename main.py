@@ -197,12 +197,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         waiting_for_whitelist_add[user.id] = chat_id
         waiting_for_whitelist_remove.pop(user.id, None)
         await query.edit_message_text(
-            "➕ <b>Ruxsat beriladigan link yoki username yuboring</b>\n\n"
-            "Masalan:\n"
+            "⚙️ <b>Boshqaruv paneli</b>\n\nRuxsat link qo'shish rejimi faol.",
+            parse_mode="HTML"
+        )
+        await query.message.reply_text(
+            "➕ <b>Ruxsat beriladigan link yoki username yuboring:</b>\n\n"
             "• <code>@iforafashion</code>\n"
             "• <code>instagram.com/iforafashion</code>\n"
             "• <code>t.me/iforafashion</code>\n\n"
-            "Bekor qilish uchun /cancel yozing.",
+            "👇 Quyiga yozing, men avtomatik qo'shaman.\n"
+            "Bekor qilish: /cancel",
             parse_mode="HTML"
         )
         return
@@ -372,11 +376,6 @@ async def check_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         warnings[chat.id][user_id] = 0
 
-        await context.bot.send_message(
-            chat.id,
-            f"🚫 {mention} guruhdan chiqarildi! (3 marta qoida buzdi)",
-            parse_mode="HTML"
-        )
         await send_to_admin(
             context, chat.id,
             f"🚫 <b>Ban berildi</b> | {chat.title}\n\n"
@@ -386,13 +385,6 @@ async def check_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     else:
         remaining = 3 - warn_count
-        await context.bot.send_message(
-            chat.id,
-            f"⚠️ {mention}!\n"
-            f"Ruxsatsiz link taqiqlanadi.\n"
-            f"Ogohlantirish: {warn_count}/3 (yana {remaining} ta qoldi)",
-            parse_mode="HTML"
-        )
         await send_to_admin(
             context, chat.id,
             f"⚠️ <b>Ogohlantirish</b> | {chat.title}\n\n"
