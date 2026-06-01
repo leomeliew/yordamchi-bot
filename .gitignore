@@ -47,3 +47,13 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# Bot ma'lumotlari (har serverda o'z fayli bo'ladi)
+bot_data.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+.env.local
