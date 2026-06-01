@@ -1,5 +1,6 @@
 import os
 import re
+import json
 import logging
 from flask import Flask
 from threading import Thread
@@ -26,11 +27,42 @@ def keep_alive():
 logging.basicConfig(level=logging.INFO)
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
+DATA_FILE = "bot_data.json"
+
+# ─── Persistent storage ───────────────────────────────────
+def load_data():
+    global group_admins, whitelist, warnings
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE, "r") as f:
+                data = json.load(f)
+            # JSON keys are strings — convert back to int
+            group_admins = {int(k): v for k, v in data.get("group_admins", {}).items()}
+            whitelist    = {int(k): v for k, v in data.get("whitelist", {}).items()}
+            warnings     = {int(k): {int(uid): cnt for uid, cnt in v.items()}
+                            for k, v in data.get("warnings", {}).items()}
+            logging.info(f"Ma'lumotlar yuklandi: {len(group_admins)} guruh, {len(whitelist)} whitelist")
+        except Exception as e:
+            logging.warning(f"Ma'lumot yuklashda xato: {e}")
+
+def save_data():
+    try:
+        with open(DATA_FILE, "w") as f:
+            json.dump({
+                "group_admins": group_admins,
+                "whitelist":    whitelist,
+                "warnings":     warnings,
+            }, f)
+    except Exception as e:
+        logging.warning(f"Ma'lumot saqlashda xato: {e}")
+
 # ─── Ma'lumotlar ──────────────────────────────────────────
-warnings = {}        # {chat_id: {user_id: count}}
-whitelist = {}       # {chat_id: [entry, ...]}
-group_admins = {}    # {chat_id: admin_user_id}
-waiting_add = {}     # {user_id: chat_id}  — link kutilayotgan adminlar
+warnings     = {}   # {chat_id: {user_id: count}}
+whitelist    = {}   # {chat_id: [entry, ...]}
+group_admins = {}   # {chat_id: admin_user_id}
+waiting_add  = {}   # {user_id: chat_id}  — link kutilayotgan adminlar
+
+load_data()
 
 LINK_PATTERN = re.compile(r'(https?://\S+|www\.\S+|t\.me/\S+)', re.IGNORECASE)
 USERNAME_PATTERN = re.compile(r'@(\w{5,})')
@@ -110,6 +142,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         group_admins[chat.id] = user.id
+        save_data()
         logging.info(f"Admin saqlandi: chat={chat.id}, user={user.id}")
 
         sent_private = False
@@ -222,6 +255,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         entry = parts[2]
         if chat_id in whitelist and entry in whitelist[chat_id]:
             whitelist[chat_id].remove(entry)
+            save_data()
         try:
             info = await context.bot.get_chat(chat_id)
             title = info.title
@@ -257,6 +291,7 @@ async def private_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if entry not in whitelist[chat_id]:
             whitelist[chat_id].append(entry)
+            save_data()
             try:
                 info = await context.bot.get_chat(chat_id)
                 title = info.title
@@ -325,6 +360,7 @@ async def check_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         warnings[chat.id] = {}
     warnings[chat.id][user.id] = warnings[chat.id].get(user.id, 0) + 1
     count = warnings[chat.id][user.id]
+    save_data()
 
     if count >= 3:
         try:
@@ -333,6 +369,7 @@ async def check_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
         warnings[chat.id][user.id] = 0
+        save_data()
 
         await notify_admin(
             context, chat.id,
@@ -360,6 +397,7 @@ async def new_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             added_by = message.from_user
             if added_by:
                 group_admins[chat.id] = added_by.id
+                save_data()
                 logging.info(f"Bot qo'shildi: chat={chat.id}, admin={added_by.id}")
                 try:
                     await context.bot.send_message(
