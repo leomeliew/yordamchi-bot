@@ -5,7 +5,7 @@ from flask import Flask
 from threading import Thread
 from telegram import Update
 from telegram.ext import (
-    ApplicationBuilder, MessageHandler,
+    ApplicationBuilder, CommandHandler, MessageHandler,
     ContextTypes, filters
 )
 
@@ -125,6 +125,19 @@ async def check_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="HTML"
             )
 
+# ─── /start komandasi ────────────────────────────────────
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "👋 Salom! Men <b>Yordamchi Admin</b> botiman!\n\n"
+        "🛡 <b>Mening vazifalarim:</b>\n\n"
+        "🔗 Guruhda link yuborilsa — o'chirib, ogohlantiraman\n"
+        "📢 Reklama yuborilsa — o'chirib, ogohlantiraman\n"
+        "⚠️ 3 marta qoida buzilsa — guruhdan chiqaraman\n"
+        "👋 Kirish/chiqish xabarlarini avtomatik o'chiraman\n\n"
+        "➕ Meni guruhingizga admin qilib qo'shing va ishim boshlanadi!",
+        parse_mode="HTML"
+    )
+
 # ─── Kirish/Chiqish xabarlarini o'chirish ─────────────────
 async def delete_service_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -137,6 +150,9 @@ def main():
     keep_alive()
 
     bot_app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    # /start komandasi
+    bot_app.add_handler(CommandHandler("start", start))
 
     # Matn xabarlar
     bot_app.add_handler(MessageHandler(
