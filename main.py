@@ -124,6 +124,7 @@ def panel_keyboard(chat_id):
         [InlineKeyboardButton("➕ Ruxsat link qo'shish", callback_data=f"add|{chat_id}")],
         [InlineKeyboardButton(f"📋 Ro'yxat ({count} ta)", callback_data=f"list|{chat_id}")],
         [InlineKeyboardButton("❌ Ro'yxatdan o'chirish", callback_data=f"delmenu|{chat_id}")],
+        [InlineKeyboardButton("ℹ️ Bot haqida / Yordam", callback_data=f"help|{chat_id}")],
     ])
 
 async def send_panel(target_id, chat_id, context, title="Guruh"):
@@ -160,9 +161,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await send_panel(user.id, chat_id, context, title)
         else:
             await update.message.reply_text(
-                "👋 Salom!\n\n"
-                "Botni guruhga admin sifatida qo'shing,\n"
-                "keyin guruhda /start bosing."
+                "👋 <b>Salom! Men guruh moderator botiman.</b>\n\n"
+                "📋 <b>Qanday ishlayman:</b>\n\n"
+                "1️⃣ Meni guruhga <b>admin</b> sifatida qo'shing\n"
+                "2️⃣ Guruhda <b>/start</b> buyrug'ini yuboring\n"
+                "3️⃣ Shaxsiy xabaringizga boshqaruv paneli keladi\n\n"
+                "🛡 <b>Nima qilaman:</b>\n"
+                "• Reklama va begona linkları o'chiraman\n"
+                "• Mijozlar narx so'ragan linkni o'chirmayman\n"
+                "• Iforafashion linklarini har doim o'tkazib yuboraman\n"
+                "• Har bir qoidabuzarlik haqida sizga DM yuboraman\n"
+                "• 3 marta ogohlantirish → foydalanuvchini guruhdan chiqaraman\n\n"
+                "⚙️ <b>Boshqaruv paneli orqali:</b>\n"
+                "• Ruxsat etilgan linklar ro'yxatini boshqarish\n"
+                "• Yangi domenlar qo'shish/o'chirish\n\n"
+                "👇 Boshlash uchun meni guruhga admin qilib qo'shing!",
+                parse_mode="HTML"
             )
         return
 
@@ -211,10 +225,26 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     parts = data.split("|")
     action = parts[0]
 
-    if action == "about":
+    if action in ("about", "help"):
         await query.edit_message_text(
-            "ℹ️ Bot ruxsatsiz link yuborilsa o'chiradi,\n"
-            "3 ogohlantirishdan keyin chiqaradi.",
+            "ℹ️ <b>Bot qanday ishlaydi?</b>\n\n"
+            "🛡 <b>Nima qilaman:</b>\n"
+            "• Reklama va begona linkları <b>o'chiraman</b>\n"
+            "• Mijozlar narx so'ragan linkni <b>o'chirmayman</b>\n"
+            "• Iforafashion linklarini har doim <b>o'tkazib yuboraman</b>\n"
+            "• Har bir qoidabuzarlik haqida sizga <b>DM yuboraman</b>\n"
+            "• 3 marta ogohlantirish → foydalanuvchini <b>guruhdan chiqaraman</b>\n\n"
+            "✅ <b>Ruxsat berilgan xabarlar:</b>\n"
+            "• «qanchadan», «narxi», «bormi» kabi so'zlar bilan kelgan linklar\n"
+            "• Iforafashion Instagram/sahifasi linki\n"
+            "• Siz whitelist ga qo'shgan domenlar\n\n"
+            "❌ <b>O'chiriladigan xabarlar:</b>\n"
+            "• Boshqa kanal/guruh reklamalari\n"
+            "• Begona do'kon va sahifalar linki\n"
+            "• «Obuna bo'ling», «kanalimga» kabi reklama iboralari\n\n"
+            "⚙️ <b>Sozlash:</b>\n"
+            "Quyidagi «Orqaga» tugmasini bosib, whitelist ga yangi domenlar qo'shing.",
+            parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([[
                 InlineKeyboardButton("🔙 Orqaga", callback_data=f"back|{parts[1]}")
             ]])
