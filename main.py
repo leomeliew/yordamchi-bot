@@ -6,7 +6,7 @@ from threading import Thread
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, MessageHandler, CommandHandler,
-    CallbackQueryHandler, ContextTypes, filters, ConversationHandler
+    CallbackQueryHandler, ContextTypes, filters
 )
 
 # ─── Keep Alive ───────────────────────────────────────────
@@ -22,66 +22,335 @@ def run_flask():
 def keep_alive():
     Thread(target=run_flask).start()
 
-# ─── Sozlamalar ───────────────────────────────────────────
+# ─── Logging ──────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO)
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
-# {chat_id: {user_id: warn_count}}
-warnings = {}
+# ─── Ma'lumotlar ──────────────────────────────────────────
+warnings = {}        # {chat_id: {user_id: count}}
+whitelist = {}       # {chat_id: [entry, ...]}
+group_admins = {}    # {chat_id: admin_user_id}
+waiting_add = {}     # {user_id: chat_id}  — link kutilayotgan adminlar
 
-# {chat_id: ["@sahifa", "instagram.com/sahifa", ...]}
-whitelist = {}
-
-# Bot qo'shgan admin: {chat_id: admin_user_id}
-group_admins = {}
-
-# {admin_user_id: chat_id}
-waiting_for_whitelist_add = {}
-waiting_for_whitelist_remove = {}
-
-# Link pattern
 LINK_PATTERN = re.compile(r'(https?://\S+|www\.\S+|t\.me/\S+)', re.IGNORECASE)
 USERNAME_PATTERN = re.compile(r'@(\w{5,})')
 
-# ─── Yordamchi funksiyalar ────────────────────────────────
-def is_admin_status(status: str) -> bool:
+# ─── Yordamchi ────────────────────────────────────────────
+def is_admin_status(status):
     return status in ("administrator", "creator")
 
-async def is_user_admin(context, chat_id: int, user_id: int) -> bool:
+async def get_member_status(context, chat_id, user_id):
     try:
-        member = await context.bot.get_chat_member(chat_id, user_id)
-        return is_admin_status(member.status)
+        m = await context.bot.get_chat_member(chat_id, user_id)
+        return m.status
     except Exception:
-        return False
+        return "member"
 
-def is_whitelisted(text: str, chat_id: int) -> bool:
-    allowed = whitelist.get(chat_id, [])
-    text_lower = text.lower()
-    for entry in allowed:
-        if entry.lower() in text_lower:
+def is_whitelisted(text, chat_id):
+    for entry in whitelist.get(chat_id, []):
+        if entry.lower() in text.lower():
             return True
     return False
 
-async def send_to_admin(context, chat_id: int, text: str):
+def panel_keyboard(chat_id):
+    count = len(whitelist.get(chat_id, []))
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("➕ Ruxsat link qo'shish", callback_data=f"add|{chat_id}")],
+        [InlineKeyboardButton(f"📋 Ro'yxat ({count} ta)", callback_data=f"list|{chat_id}")],
+        [InlineKeyboardButton("❌ Ro'yxatdan o'chirish", callback_data=f"delmenu|{chat_id}")],
+    ])
+
+async def send_panel(target_id, chat_id, context, title="Guruh"):
+    await context.bot.send_message(
+        target_id,
+        f"⚙️ <b>{title}</b> — Boshqaruv paneli\n\nQuyidagi tugmalar orqali sozlang:",
+        parse_mode="HTML",
+        reply_markup=panel_keyboard(chat_id)
+    )
+
+async def notify_admin(context, chat_id, text):
     admin_id = group_admins.get(chat_id)
-    if admin_id:
+    if not admin_id:
+        return
+    try:
+        await context.bot.send_message(admin_id, text, parse_mode="HTML")
+    except Exception as e:
+        logging.warning(f"Admin ga yuborib bo'lmadi: {e}")
+
+# ─── /start ───────────────────────────────────────────────
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.message.chat
+    user = update.message.from_user
+
+    if chat.type == "private":
+        my_groups = [cid for cid, uid in group_admins.items() if uid == user.id]
+        if my_groups:
+            chat_id = my_groups[0]
+            try:
+                info = await context.bot.get_chat(chat_id)
+                title = info.title
+            except Exception:
+                title = "Guruh"
+            await send_panel(user.id, chat_id, context, title)
+        else:
+            await update.message.reply_text(
+                "👋 Salom!\n\n"
+                "Botni guruhga admin sifatida qo'shing,\n"
+                "keyin guruhda /start bosing."
+            )
+        return
+
+    if chat.type in ("group", "supergroup"):
+        status = await get_member_status(context, chat.id, user.id)
+        if not is_admin_status(status):
+            try:
+                await update.message.delete()
+            except Exception:
+                pass
+            return
+
+        group_admins[chat.id] = user.id
+        logging.info(f"Admin saqlandi: chat={chat.id}, user={user.id}")
+
+        sent_private = False
         try:
-            await context.bot.send_message(admin_id, text, parse_mode="HTML")
+            await send_panel(user.id, chat.id, context, chat.title)
+            sent_private = True
         except Exception as e:
-            logging.warning(f"Adminga xabar yuborishda xato: {e}")
+            logging.warning(f"Shaxsiy panel yuborib bo'lmadi: {e}")
 
-def get_panel_keyboard(chat_id: int):
-    allowed = whitelist.get(chat_id, [])
-    count = len(allowed)
-    keyboard = [
-        [InlineKeyboardButton("➕ Ruxsat link qo'shish", callback_data=f"add_{chat_id}")],
-        [InlineKeyboardButton(f"📋 Ro'yxat ({count} ta)", callback_data=f"list_{chat_id}")],
-        [InlineKeyboardButton("❌ Ro'yxatdan o'chirish", callback_data=f"removemenu_{chat_id}")],
-        [InlineKeyboardButton("ℹ️ Bot haqida", callback_data="about")],
-    ]
-    return InlineKeyboardMarkup(keyboard)
+        if sent_private:
+            try:
+                await update.message.reply_text("✅ Boshqaruv paneli shaxsiy xabaringizga yuborildi!")
+            except Exception:
+                pass
+        else:
+            try:
+                await update.message.reply_text(
+                    f"⚙️ <b>{chat.title}</b> — Boshqaruv paneli",
+                    parse_mode="HTML",
+                    reply_markup=panel_keyboard(chat.id)
+                )
+            except Exception:
+                pass
 
-# ─── Bot qo'shilganda ─────────────────────────────────────
+# ─── Callback tugmalar ────────────────────────────────────
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user = query.from_user
+    data = query.data
+
+    parts = data.split("|")
+    action = parts[0]
+
+    if action == "about":
+        await query.edit_message_text(
+            "ℹ️ Bot ruxsatsiz link yuborilsa o'chiradi,\n"
+            "3 ogohlantirishdan keyin chiqaradi.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Orqaga", callback_data=f"back|{parts[1]}")
+            ]])
+        )
+        return
+
+    chat_id = int(parts[1]) if len(parts) > 1 else None
+
+    if action == "back":
+        try:
+            info = await context.bot.get_chat(chat_id)
+            title = info.title
+        except Exception:
+            title = "Guruh"
+        await query.edit_message_text(
+            f"⚙️ <b>{title}</b> — Boshqaruv paneli\n\nQuyidagi tugmalar orqali sozlang:",
+            parse_mode="HTML",
+            reply_markup=panel_keyboard(chat_id)
+        )
+
+    elif action == "add":
+        waiting_add[user.id] = chat_id
+        await query.edit_message_text(
+            "⚙️ <b>Boshqaruv paneli</b>\n\nRuxsat link qo'shish rejimi faol.",
+            parse_mode="HTML"
+        )
+        await query.message.reply_text(
+            "➕ <b>Ruxsat beriladigan link yoki username yuboring:</b>\n\n"
+            "• <code>@sahifa</code>\n"
+            "• <code>instagram.com/sahifa</code>\n"
+            "• <code>t.me/sahifa</code>\n\n"
+            "👇 Shu yerga yozing — men avtomatik qo'shaman.\n"
+            "Bekor qilish: /cancel",
+            parse_mode="HTML"
+        )
+
+    elif action == "list":
+        allowed = whitelist.get(chat_id, [])
+        if allowed:
+            items = "\n".join([f"• <code>{a}</code>" for a in allowed])
+            text = f"📋 <b>Ruxsat berilgan ({len(allowed)} ta):</b>\n\n{items}"
+        else:
+            text = "📋 Ro'yxat bo'sh."
+        await query.edit_message_text(
+            text, parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Orqaga", callback_data=f"back|{chat_id}")
+            ]])
+        )
+
+    elif action == "delmenu":
+        allowed = whitelist.get(chat_id, [])
+        if not allowed:
+            await query.edit_message_text(
+                "❌ Ro'yxat bo'sh.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Orqaga", callback_data=f"back|{chat_id}")
+                ]])
+            )
+            return
+        keyboard = [
+            [InlineKeyboardButton(f"🗑 {a}", callback_data=f"del|{chat_id}|{a}")]
+            for a in allowed
+        ]
+        keyboard.append([InlineKeyboardButton("🔙 Orqaga", callback_data=f"back|{chat_id}")])
+        await query.edit_message_text(
+            "❌ O'chirmoqchi bo'lgan linkni tanlang:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    elif action == "del":
+        entry = parts[2]
+        if chat_id in whitelist and entry in whitelist[chat_id]:
+            whitelist[chat_id].remove(entry)
+        try:
+            info = await context.bot.get_chat(chat_id)
+            title = info.title
+        except Exception:
+            title = "Guruh"
+        await query.edit_message_text(
+            f"✅ <code>{entry}</code> o'chirildi.\n\n"
+            f"⚙️ <b>{title}</b> — Boshqaruv paneli",
+            parse_mode="HTML",
+            reply_markup=panel_keyboard(chat_id)
+        )
+
+# ─── Shaxsiy xabarlar ─────────────────────────────────────
+async def private_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.message.from_user
+    text = (update.message.text or "").strip()
+
+    if text == "/cancel":
+        waiting_add.pop(user.id, None)
+        await update.message.reply_text("❌ Bekor qilindi.")
+        return
+
+    if user.id in waiting_add:
+        chat_id = waiting_add.pop(user.id)
+        entry = text.lower().strip()
+
+        if not entry:
+            await update.message.reply_text("❗ Bo'sh xabar yuborildi.")
+            return
+
+        if chat_id not in whitelist:
+            whitelist[chat_id] = []
+
+        if entry not in whitelist[chat_id]:
+            whitelist[chat_id].append(entry)
+            try:
+                info = await context.bot.get_chat(chat_id)
+                title = info.title
+            except Exception:
+                title = "Guruh"
+            await update.message.reply_text(
+                f"✅ <code>{entry}</code> qo'shildi!\n\n"
+                f"⚙️ <b>{title}</b> — Boshqaruv paneli",
+                parse_mode="HTML",
+                reply_markup=panel_keyboard(chat_id)
+            )
+        else:
+            await update.message.reply_text(
+                f"ℹ️ <code>{entry}</code> allaqachon ro'yxatda.",
+                parse_mode="HTML"
+            )
+        return
+
+    my_groups = [cid for cid, uid in group_admins.items() if uid == user.id]
+    if my_groups:
+        chat_id = my_groups[0]
+        try:
+            info = await context.bot.get_chat(chat_id)
+            title = info.title
+        except Exception:
+            title = "Guruh"
+        await send_panel(user.id, chat_id, context, title)
+    else:
+        await update.message.reply_text("Botni guruhga qo'shing va /start bosing.")
+
+# ─── Guruhda xabar tekshirish ─────────────────────────────
+async def check_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.message
+    if not message or not message.from_user:
+        return
+
+    chat = message.chat
+    user = message.from_user
+
+    status = await get_member_status(context, chat.id, user.id)
+    if is_admin_status(status):
+        return
+
+    text = message.text or message.caption or ""
+    if not text:
+        return
+
+    links = LINK_PATTERN.findall(text)
+    usernames = USERNAME_PATTERN.findall(text)
+
+    if not links and not usernames:
+        return
+
+    if is_whitelisted(text, chat.id):
+        return
+
+    detail = links[0][:60] if links else f"@{usernames[0]}"
+    mention = f"<a href='tg://user?id={user.id}'>{user.first_name}</a>"
+
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+    if chat.id not in warnings:
+        warnings[chat.id] = {}
+    warnings[chat.id][user.id] = warnings[chat.id].get(user.id, 0) + 1
+    count = warnings[chat.id][user.id]
+
+    if count >= 3:
+        try:
+            await context.bot.ban_chat_member(chat.id, user.id)
+            await context.bot.unban_chat_member(chat.id, user.id)
+        except Exception:
+            pass
+        warnings[chat.id][user.id] = 0
+
+        await notify_admin(
+            context, chat.id,
+            f"🚫 <b>Ban</b> | {chat.title}\n"
+            f"👤 {mention} (ID: <code>{user.id}</code>)\n"
+            f"📎 <code>{detail}</code>\n"
+            f"💬 <code>{text[:150]}</code>"
+        )
+    else:
+        await notify_admin(
+            context, chat.id,
+            f"⚠️ <b>Ogohlantirish {count}/3</b> | {chat.title}\n"
+            f"👤 {mention} (ID: <code>{user.id}</code>)\n"
+            f"📎 <code>{detail}</code>\n"
+            f"💬 <code>{text[:150]}</code>"
+        )
+
+# ─── Kirish xabari ────────────────────────────────────────
 async def new_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     chat = message.chat
@@ -91,349 +360,65 @@ async def new_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             added_by = message.from_user
             if added_by:
                 group_admins[chat.id] = added_by.id
+                logging.info(f"Bot qo'shildi: chat={chat.id}, admin={added_by.id}")
                 try:
                     await context.bot.send_message(
                         added_by.id,
                         f"👋 Salom <b>{added_by.first_name}</b>!\n\n"
-                        f"✅ Bot <b>{chat.title}</b> guruhiga qo'shildi.\n\n"
-                        f"Barcha hisobotlar va boshqaruv shu yerda (shaxsiy) bo'ladi.\n\n"
-                        f"⚙️ Boshqaruv paneliga kirish:",
+                        f"✅ Bot <b>{chat.title}</b> ga qo'shildi.\n"
+                        f"Hisobotlar va boshqaruv shu yerda bo'ladi.\n\n"
+                        f"⚙️ Boshqaruv paneli:",
                         parse_mode="HTML",
-                        reply_markup=get_panel_keyboard(chat.id)
+                        reply_markup=panel_keyboard(chat.id)
                     )
                 except Exception as e:
-                    logging.warning(f"Adminga xabar yuborishda xato: {e}")
-
+                    logging.warning(f"Admin ga yuborib bo'lmadi: {e}")
+                    try:
+                        await context.bot.send_message(
+                            chat.id,
+                            "✅ Bot sozlandi! Admin, menga shaxsiy /start yuboring.",
+                        )
+                    except Exception:
+                        pass
     try:
         await message.delete()
     except Exception:
         pass
 
-# ─── /start komandasi ─────────────────────────────────────
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat = update.message.chat
-    user = update.message.from_user
-
-    if chat.type in ("group", "supergroup"):
-        member = await context.bot.get_chat_member(chat.id, user.id)
-        if not is_admin_status(member.status):
-            return
-        group_admins[chat.id] = user.id
-        try:
-            await context.bot.send_message(
-                user.id,
-                f"⚙️ <b>{chat.title}</b> — Boshqaruv paneli\n\n"
-                f"Quyidagi tugmalar orqali guruhni boshqaring:",
-                parse_mode="HTML",
-                reply_markup=get_panel_keyboard(chat.id)
-            )
-            await update.message.reply_text("✅ Boshqaruv paneli shaxsiy xabaringizga yuborildi!")
-        except Exception:
-            await update.message.reply_text(
-                f"⚙️ <b>{chat.title}</b> — Boshqaruv paneli",
-                parse_mode="HTML",
-                reply_markup=get_panel_keyboard(chat.id)
-            )
-        return
-
-    user_groups = [cid for cid, uid in group_admins.items() if uid == user.id]
-    if user_groups:
-        chat_id = user_groups[0]
-        try:
-            chat_info = await context.bot.get_chat(chat_id)
-            title = chat_info.title
-        except Exception:
-            title = str(chat_id)
-        await update.message.reply_text(
-            f"⚙️ <b>{title}</b> — Boshqaruv paneli",
-            parse_mode="HTML",
-            reply_markup=get_panel_keyboard(chat_id)
-        )
-    else:
-        await update.message.reply_text(
-            "👋 Salom! Men <b>Yordamchi Admin</b> botiman!\n\n"
-            "Meni guruhga admin sifatida qo'shing va /start bosing.",
-            parse_mode="HTML"
-        )
-
-# ─── Tugma bosilganda ─────────────────────────────────────
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user = query.from_user
-    data = query.data
-
-    if data == "about":
-        await query.edit_message_text(
-            "ℹ️ <b>Yordamchi Admin Bot</b>\n\n"
-            "• Ruxsatsiz link yuborilsa — o'chiradi\n"
-            "• 3 ogohlantirishdan keyin chiqaradi\n"
-            "• Kirish/chiqish xabarlarini tozalaydi\n"
-            "• Har harakat haqida adminga hisobot beradi\n\n"
-            "Meni guruhga admin qilib qo'shing va /start bosing.",
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔙 Orqaga", callback_data="back_main")
-            ]])
-        )
-        return
-
-    if data == "back_main":
-        user_groups = [cid for cid, uid in group_admins.items() if uid == user.id]
-        if user_groups:
-            chat_id = user_groups[0]
-            try:
-                chat_info = await context.bot.get_chat(chat_id)
-                title = chat_info.title
-            except Exception:
-                title = str(chat_id)
-            await query.edit_message_text(
-                f"⚙️ <b>{title}</b> — Boshqaruv paneli",
-                parse_mode="HTML",
-                reply_markup=get_panel_keyboard(chat_id)
-            )
-        return
-
-    if data.startswith("add_"):
-        chat_id = int(data[4:])
-        waiting_for_whitelist_add[user.id] = chat_id
-        waiting_for_whitelist_remove.pop(user.id, None)
-        await query.edit_message_text(
-            "⚙️ <b>Boshqaruv paneli</b>\n\nRuxsat link qo'shish rejimi faol.",
-            parse_mode="HTML"
-        )
-        await query.message.reply_text(
-            "➕ <b>Ruxsat beriladigan link yoki username yuboring:</b>\n\n"
-            "• <code>@iforafashion</code>\n"
-            "• <code>instagram.com/iforafashion</code>\n"
-            "• <code>t.me/iforafashion</code>\n\n"
-            "👇 Shu yerga yozing — men avtomatik qo'shaman.\n"
-            "Bekor qilish: /cancel",
-            parse_mode="HTML"
-        )
-        return
-
-    if data.startswith("list_"):
-        chat_id = int(data[5:])
-        allowed = whitelist.get(chat_id, [])
-        if allowed:
-            items = "\n".join([f"• <code>{a}</code>" for a in allowed])
-            text = f"📋 <b>Ruxsat berilgan linklar:</b>\n\n{items}"
-        else:
-            text = "📋 Ro'yxat hozircha bo'sh.\n\nQo'shish uchun «Ruxsat link qo'shish» tugmasini bosing."
-        await query.edit_message_text(
-            text,
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔙 Orqaga", callback_data="back_main")
-            ]])
-        )
-        return
-
-    if data.startswith("removemenu_"):
-        chat_id = int(data[11:])
-        allowed = whitelist.get(chat_id, [])
-        if not allowed:
-            await query.edit_message_text(
-                "❌ Ro'yxat bo'sh. Avval link qo'shing.",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("🔙 Orqaga", callback_data="back_main")
-                ]])
-            )
-            return
-        keyboard = [
-            [InlineKeyboardButton(f"🗑 {a}", callback_data=f"del_{chat_id}_{a}")]
-            for a in allowed
-        ]
-        keyboard.append([InlineKeyboardButton("🔙 Orqaga", callback_data="back_main")])
-        await query.edit_message_text(
-            "❌ <b>Qaysi linkni o'chirmoqchisiz?</b>",
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        return
-
-    if data.startswith("del_"):
-        parts = data[4:].split("_", 1)
-        if len(parts) == 2:
-            chat_id = int(parts[0])
-            entry = parts[1]
-            if chat_id in whitelist and entry in whitelist[chat_id]:
-                whitelist[chat_id].remove(entry)
-            try:
-                chat_info = await context.bot.get_chat(chat_id)
-                title = chat_info.title
-            except Exception:
-                title = str(chat_id)
-            await query.edit_message_text(
-                f"✅ <code>{entry}</code> ro'yxatdan o'chirildi.\n\n"
-                f"⚙️ <b>{title}</b> — Boshqaruv paneli",
-                parse_mode="HTML",
-                reply_markup=get_panel_keyboard(chat_id)
-            )
-        return
-
-# ─── Shaxsiy xabarda link qabul qilish ───────────────────
-async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message = update.message
-    user = message.from_user
-    text = (message.text or "").strip()
-
-    if text == "/cancel":
-        waiting_for_whitelist_add.pop(user.id, None)
-        await message.reply_text("❌ Bekor qilindi.")
-        return
-
-    if user.id in waiting_for_whitelist_add:
-        chat_id = waiting_for_whitelist_add.pop(user.id)
-
-        entry = text.lower().strip()
-        if not entry:
-            await message.reply_text("❗ Bo'sh xabar. Iltimos link yoki username yuboring.")
-            return
-
-        if chat_id not in whitelist:
-            whitelist[chat_id] = []
-
-        if entry not in whitelist[chat_id]:
-            whitelist[chat_id].append(entry)
-            try:
-                chat_info = await context.bot.get_chat(chat_id)
-                title = chat_info.title
-            except Exception:
-                title = str(chat_id)
-            await message.reply_text(
-                f"✅ <code>{entry}</code> ruxsat ro'yxatiga qo'shildi!\n\n"
-                f"⚙️ <b>{title}</b> — Boshqaruv paneli",
-                parse_mode="HTML",
-                reply_markup=get_panel_keyboard(chat_id)
-            )
-        else:
-            await message.reply_text(
-                f"ℹ️ <code>{entry}</code> allaqachon ro'yxatda.",
-                parse_mode="HTML"
-            )
-        return
-
-    user_groups = [cid for cid, uid in group_admins.items() if uid == user.id]
-    if user_groups:
-        chat_id = user_groups[0]
-        try:
-            chat_info = await context.bot.get_chat(chat_id)
-            title = chat_info.title
-        except Exception:
-            title = str(chat_id)
-        await message.reply_text(
-            f"⚙️ <b>{title}</b> — Boshqaruv paneli",
-            parse_mode="HTML",
-            reply_markup=get_panel_keyboard(chat_id)
-        )
-
-# ─── Guruhda xabarlarni tekshirish ───────────────────────
-async def check_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message = update.message
-    if not message or not message.from_user:
-        return
-
-    chat = message.chat
-    user = message.from_user
-
-    if await is_user_admin(context, chat.id, user.id):
-        return
-
-    text = message.text or message.caption or ""
-    if not text:
-        return
-
-    user_id = user.id
-    mention = f"<a href='tg://user?id={user_id}'>{user.first_name}</a>"
-
-    links_found = LINK_PATTERN.findall(text)
-    usernames_found = USERNAME_PATTERN.findall(text)
-
-    if not links_found and not usernames_found:
-        return
-
-    if is_whitelisted(text, chat.id):
-        return
-
-    violation_detail = links_found[0][:60] if links_found else f"@{usernames_found[0]}"
-
-    try:
-        await message.delete()
-    except Exception as e:
-        logging.warning(f"Xabar o'chirishda xato: {e}")
-
-    if chat.id not in warnings:
-        warnings[chat.id] = {}
-    warnings[chat.id][user_id] = warnings[chat.id].get(user_id, 0) + 1
-    warn_count = warnings[chat.id][user_id]
-
-    if warn_count >= 3:
-        try:
-            await context.bot.ban_chat_member(chat.id, user_id)
-            await context.bot.unban_chat_member(chat.id, user_id)
-        except Exception as e:
-            logging.warning(f"Ban berishda xato: {e}")
-
-        warnings[chat.id][user_id] = 0
-
-        await send_to_admin(
-            context, chat.id,
-            f"🚫 <b>Ban berildi</b> | {chat.title}\n\n"
-            f"👤 {mention} (ID: <code>{user_id}</code>)\n"
-            f"📎 Yuborgan: <code>{violation_detail}</code>\n"
-            f"📝 To'liq matn: <code>{text[:150]}</code>"
-        )
-    else:
-        remaining = 3 - warn_count
-        await send_to_admin(
-            context, chat.id,
-            f"⚠️ <b>Ogohlantirish</b> | {chat.title}\n\n"
-            f"👤 {mention} (ID: <code>{user_id}</code>)\n"
-            f"📎 Yuborgan: <code>{violation_detail}</code>\n"
-            f"📊 Ogohlantirish: {warn_count}/3 (yana {remaining} ta qoldi)\n"
-            f"📝 To'liq matn: <code>{text[:150]}</code>"
-        )
-
-# ─── Chiqish xabarini o'chirish ───────────────────────────
-async def delete_left_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ─── Chiqish xabari ───────────────────────────────────────
+async def left_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await update.message.delete()
     except Exception:
         pass
 
-# ─── Ishga tushirish ──────────────────────────────────────
+# ─── Main ─────────────────────────────────────────────────
 def main():
     keep_alive()
-    bot_app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    bot_app.add_handler(CommandHandler("start", start))
-    bot_app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(button_handler))
 
-    bot_app.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS,
+    app.add_handler(MessageHandler(
+        filters.ChatType.PRIVATE & filters.TEXT, private_message
+    ))
+    app.add_handler(MessageHandler(
+        filters.ChatType.GROUPS & filters.TEXT & ~filters.COMMAND, check_message
+    ))
+    app.add_handler(MessageHandler(
+        filters.ChatType.GROUPS & (filters.PHOTO | filters.VIDEO | filters.Document.ALL),
         check_message
     ))
-    bot_app.add_handler(MessageHandler(
-        (filters.PHOTO | filters.VIDEO | filters.Document.ALL) & filters.ChatType.GROUPS,
-        check_message
-    ))
-
-    bot_app.add_handler(MessageHandler(
-        filters.TEXT & filters.ChatType.PRIVATE,
-        handle_private_message
-    ))
-
-    bot_app.add_handler(MessageHandler(
+    app.add_handler(MessageHandler(
         filters.StatusUpdate.NEW_CHAT_MEMBERS, new_member_handler
     ))
-    bot_app.add_handler(MessageHandler(
-        filters.StatusUpdate.LEFT_CHAT_MEMBER, delete_left_message
+    app.add_handler(MessageHandler(
+        filters.StatusUpdate.LEFT_CHAT_MEMBER, left_member_handler
     ))
 
     print("✅ Bot ishga tushdi!")
-    bot_app.run_polling()
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
