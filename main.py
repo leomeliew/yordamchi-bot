@@ -40,10 +40,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🛡 <b>Mening vazifalarim:</b>\n\n"
         "🔗 Ruxsatsiz link yuborilsa — o'chirib ogohlantiraman\n"
         "👋 Kirish/chiqish xabarlarini o'chiraman\n\n"
-        "📌 <b>Buyruqlar:</b>\n"
-        "/allow @username — link ruxsat ro'yxatiga qo'shish\n"
-        "/remove @username — ro'yxatdan o'chirish\n"
-        "/list — ruxsat berilgan linklar\n\n"
         "➕ Meni guruhga admin qilib qo'shing!",
         parse_mode="HTML"
     )
@@ -53,45 +49,59 @@ async def allow_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.message.from_user
     member = await context.bot.get_chat_member(chat.id, user.id)
     if not is_admin(member.status):
-        await update.message.reply_text("⛔ Faqat adminlar bu buyruqdan foydalana oladi.")
         return
     if not context.args:
-        await update.message.reply_text("❗ Format: <code>/allow @username</code>", parse_mode="HTML")
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
         return
     entry = context.args[0].lower()
     if chat.id not in whitelist:
         whitelist[chat.id] = []
     if entry not in whitelist[chat.id]:
         whitelist[chat.id].append(entry)
-        await update.message.reply_text(f"✅ <code>{entry}</code> ruxsat ro'yxatiga qo'shildi.", parse_mode="HTML")
-    else:
-        await update.message.reply_text(f"ℹ️ <code>{entry}</code> allaqachon ro'yxatda.", parse_mode="HTML")
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
 
 async def remove_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.message.chat
     user = update.message.from_user
     member = await context.bot.get_chat_member(chat.id, user.id)
     if not is_admin(member.status):
-        await update.message.reply_text("⛔ Faqat adminlar bu buyruqdan foydalana oladi.")
         return
     if not context.args:
-        await update.message.reply_text("❗ Format: <code>/remove @username</code>", parse_mode="HTML")
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
         return
     entry = context.args[0].lower()
     if chat.id in whitelist and entry in whitelist[chat.id]:
         whitelist[chat.id].remove(entry)
-        await update.message.reply_text(f"🗑 <code>{entry}</code> ro'yxatdan o'chirildi.", parse_mode="HTML")
-    else:
-        await update.message.reply_text(f"ℹ️ <code>{entry}</code> ro'yxatda yo'q.", parse_mode="HTML")
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
 
 async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.message.chat
+    user = update.message.from_user
+    member = await context.bot.get_chat_member(chat.id, user.id)
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+    if not is_admin(member.status):
+        return
     allowed = whitelist.get(chat.id, [])
     if allowed:
         items = "\n".join([f"• <code>{a}</code>" for a in allowed])
-        await update.message.reply_text(f"📋 <b>Ruxsat berilgan linklar:</b>\n\n{items}", parse_mode="HTML")
+        await context.bot.send_message(user.id, f"📋 <b>Ruxsat berilgan linklar:</b>\n\n{items}", parse_mode="HTML")
     else:
-        await update.message.reply_text("📋 Hozircha ruxsat berilgan link yo'q.\n/allow @username orqali qo'shing.")
+        await context.bot.send_message(user.id, "📋 Hozircha ruxsat berilgan link yo'q.")
 
 async def check_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
