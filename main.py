@@ -3,7 +3,7 @@ import logging
 from flask import Flask
 from threading import Thread
 from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
+from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, filters, ContextTypes
 
 app_flask = Flask('')
 
@@ -17,6 +17,15 @@ def run_flask():
 logging.basicConfig(level=logging.INFO)
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "👋 Salom! Men <b>Yordamchi Admin</b> botiman!\n\n"
+        "🛡 <b>Mening vazifalarim:</b>\n\n"
+        "👋 Guruhga kirish/chiqish xabarlarini avtomatik o'chiraman\n\n"
+        "➕ Meni guruhingizga admin qilib qo'shing va ishim boshlanadi!",
+        parse_mode="HTML"
+    )
+
 async def delete_service_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await update.message.delete()
@@ -29,6 +38,7 @@ def main():
     flask_thread.start()
 
     bot_app = ApplicationBuilder().token(BOT_TOKEN).build()
+    bot_app.add_handler(CommandHandler("start", start))
     bot_app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, delete_service_message))
     bot_app.add_handler(MessageHandler(filters.StatusUpdate.LEFT_CHAT_MEMBER, delete_service_message))
 
