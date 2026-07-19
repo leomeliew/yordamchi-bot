@@ -14,9 +14,6 @@ def home():
 def run_flask():
     app_flask.run(host='0.0.0.0', port=8000)
 
-def keep_alive():
-    Thread(target=run_flask, daemon=True).start()
-
 logging.basicConfig(level=logging.INFO)
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
@@ -28,10 +25,13 @@ async def delete_service_message(update: Update, context: ContextTypes.DEFAULT_T
         print(f"❌ Xato: {e}")
 
 def main():
-    keep_alive()
+    flask_thread = Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+
     bot_app = ApplicationBuilder().token(BOT_TOKEN).build()
     bot_app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, delete_service_message))
     bot_app.add_handler(MessageHandler(filters.StatusUpdate.LEFT_CHAT_MEMBER, delete_service_message))
+
     print("✅ Bot ishga tushdi!")
     bot_app.run_polling(allowed_updates=Update.ALL_TYPES)
 
